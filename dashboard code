@@ -1,0 +1,105 @@
+import streamlit as st
+import pandas as pd
+import numpy_financial as npf
+import plotly.graph_objects as go
+
+# --- PAGE CONFIGURATION ---
+st.set_page_config(page_title="PIT Biogas Strategy Dashboard", layout="wide")
+st.title("💡 Pragati Institute of Technology: Biogas Financial Dashboard")
+st.markdown("Evaluating the feasibility of a 600 kg/day plant with inflation and risk analysis.")
+
+# --- SIDEBAR: INPUT VARIABLES ---
+st.sidebar.header("Strategy Controls")
+
+# Input: CSR Funding (Variable)
+csr_funding_lakhs = st.sidebar.slider("CSR Funding (in ₹ Lakhs)", 0, 100, 40)
+csr_funding = csr_funding_lakhs * 100000
+
+# Input: Economic Factors
+inflation_rate = st.sidebar.slider("Expected Annual Inflation (%)", 0.0, 10.0, 5.0) / 100
+discount_rate = st.sidebar.slider("Discount Rate (%)", 5.0, 15.0, 10.0) / 100
+
+# --- DATA CONSTANTS (From Problem Statement) ---
+TOTAL_CAPEX = 18000000 # [cite: 48]
+NET_CAPEX = TOTAL_CAPEX - csr_funding
+BASE_SAVINGS_LPG = 2904000 # [cite: 41]
+BASE_SAVINGS_WASTE = 330000 # [cite: 44]
+GROSS_BASE_SAVINGS = BASE_SAVINGS_LPG + BASE_SAVINGS_WASTE # [cite: 45]
+BASE_MAINTENANCE = 600000 # [cite: 50]
+EFFICIENCY = 0.90 # [cite: 51]
+
+# --- INFLATION-ADJUSTED CASH FLOW CALCULATIONS ---
+cash_flows = [-NET_CAPEX]
+annual_net_savings = []
+
+for year in range(1, 11):
+    # Adjusting savings and maintenance for inflation over 10 years
+    inflated_gross = GROSS_BASE_SAVINGS * ((1 + inflation_rate) ** year)
+    inflated_maint = BASE_MAINTENANCE * ((1 + inflation_rate) ** year)
+    
+    # Calculate Net Savings after 90% Efficiency [cite: 53, 54]
+    net_val = (inflated_gross * EFFICIENCY) - inflated_maint
+    cash_flows.append(net_val)
+    annual_net_savings.append(net_val)
+
+# --- KEY METRICS ---
+# NPV Calculation (10 Years) [cite: 63, 70]
+npv_value = npf.npv(discount_rate, cash_flows)
+
+# Payback Period (Years) [cite: 56, 77]
+# Using Year 1 net savings for simplified initial payback estimate
+y1_savings = annual_net_savings[0]
+payback = NET_CAPEX / y1_savings if y1_savings > 0 else 0
+
+# Fossil Fuel Reduction [cite: 78]
+lpg_reduction_pct = (8 / 28) * 100 # Replaces 8 of 28 cylinders [cite: 19, 37]
+
+# --- DASHBOARD UI ---
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Net Investment", f"₹{NET_CAPEX/100000:.1f} Lakh")
+m2.metric("Year 1 Net Savings", f"₹{y1_savings/100000:.2f} Lakh")
+m3.metric("Payback Period", f"{payback:.2f} Years", delta="-8 Years", delta_color="inverse")
+m4.metric("NPV (10 Year)", f"₹{npv_value/100000:.2f} Lakh")
+
+st.divider()
+
+# --- DECISION LOGIC & BOARD GUARDRAILS ---
+# Constraint 1: Payback < 8 years [cite: 77]
+# Constraint 2: Sustainability > 25% [cite: 78]
+# Constraint 3: Risk Exposure < 10% 
+is_go = (payback < 8) and (npv_value > 0) and (lpg_reduction_pct >= 25)
+
+if is_go:
+    st.success("### FINAL RECOMMENDATION: **GO** ✅")
+    st.write(f"This project is financially sustainable and reduces LPG dependency by {lpg_reduction_pct:.1f}%.")
+else:
+    st.error("### FINAL RECOMMENDATION: **NO-GO** ❌")
+    st.write("Project fails to meet the required financial return or payback period.")
+
+# --- VISUALIZATION ---
+chart_col, data_col = st.columns([2, 1])
+
+with chart_col:
+    # Cumulative Cash Flow Line Chart
+    years = list(range(11))
+    cumulative_cash = [sum(cash_flows[:i+1]) for i in range(11)]
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=years, y=cumulative_cash, mode='lines+markers', name='Cumulative Return'))
+    fig.add_hline(y=0, line_dash="dash", line_color="red")
+    fig.update_layout(title="10-Year Cumulative Cash Flow (Inflation Adjusted)", xaxis_title="Years", yaxis_title="Net Position (₹)")
+    st.plotly_chart(fig, use_container_width=True)
+
+with data_col:
+    st.subheader("Financial Detail")
+    details = {
+        "Metric": ["Total Cost", "CSR Grant", "Net Cost", "10yr Profit", "Risk Buffer (10%)"],
+        "Value": [
+            f"₹{TOTAL_CAPEX/100000:.1f}L",
+            f"₹{csr_funding/100000:.1f}L",
+            f"₹{NET_CAPEX/100000:.1f}L",
+            f"₹{(sum(annual_net_savings) - NET_CAPEX)/100000:.1f}L",
+            f"₹{y1_savings * 0.1 / 100000:.2f}L" # 
+        ]
+    }
+    st.table(pd.DataFrame(details))
